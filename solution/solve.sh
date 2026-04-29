@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-#
+
 # Oracle solution for INCUBYTE/hard-devops-task.
 #
-# Runs from /solution at task time. Stages a playbook and a compose file
-# into /app, runs the playbook to install Docker, then brings up the
-# Postgres + NestJS stack and waits for /checkdb to respond with HTTP 200.
+# Runs from /solution at task time. Installs Ansible, then runs the
+# reference playbook which (a) installs Docker Engine + Compose plugin,
+# (b) generates the NestJS source tree at /app/service/, and (c) writes
+# /app/docker-compose.yml. Finally brings up the stack and waits for
+# /checkdb to respond with HTTP 200.
 #
 # This script must succeed deterministically; the verifier uses its
 # success as the signal that the task is solvable.
@@ -15,25 +17,26 @@ log() { echo "[oracle $(date -u +%H:%M:%S)] $*"; }
 
 TARGET=/app
 
-# 1. Stage our reference playbook and compose file alongside the provided
-#    NestJS skeleton at /app/service/.
-log "Staging playbook and compose file into ${TARGET}"
-cp /solution/playbook.yml "${TARGET}/playbook.yml"
-cp /solution/docker-compose.yml "${TARGET}/docker-compose.yml"
+# 1. Install Ansible. The Main container intentionally ships without it, 
+# hence agent task starts from clean Ubuntu base
+log "Installing Ansible"
+apt-get update -qq
+apt-get install -y --no-install-recommends ansible
 
 cd "${TARGET}"
 
-# 2. Run the Ansible playbook locally. Installs Docker Engine + Compose
-#    plugin and starts the daemon.
+# 2. Run the Ansible playbook locally. Installs Docker,
+# generates NestJS app, writes compose file
 log "Running Ansible playbook"
-ansible-playbook -i 'localhost,' -c local playbook.yml
+ansible-playbook -i 'localhost,' -c local /solution/playbook.yml
 
 # 3. Sanity-check the Docker daemon before we try to use it.
 log "Verifying Docker daemon"
 docker info > /dev/null
 
 # 4. Bring up the stack. --build rebuilds the NestJS image from
-#    /app/service/. Postgres is pulled from Docker Hub.
+# /app/service/ (which was playbook generated). 
+# Postgres is pulled from Docker Hub.
 log "Building and starting the docker compose stack"
 docker compose up -d --build
 

@@ -1,12 +1,15 @@
 ---
 # Oracle Ansible playbook.
 #
-# Installs Docker Engine and the Docker Compose plugin from Docker's
-# official apt repository, then starts the daemon. Designed to run inside
-# a privileged container with no init system (no systemd), so dockerd is
-# launched directly via nohup rather than `service` / `systemctl`.
+# 3 responsibilities:
+# 1. Install Docker engine + Compose plugin and start the daemon
+# 2. Generate the NestJS service source tree at app/service
+# 3. Write /app/docker-compose.yml so that stack could be brought up
+#
+# Designed to be able to run inside a privileged container with no init system.
+# dockerd is launched directly via nohup rather than service/systemctl.
 
-- name: Install Docker Engine and the Compose plugin
+- name: Provision Docker, NestJS service, and compose stack
   hosts: localhost
   connection: local
   become: true
@@ -19,6 +22,7 @@
     docker_codename: "{{ ansible_distribution_release }}"
 
   tasks:
+    # === Section 1: Install Docker ===
     - name: Install prerequisite packages
       ansible.builtin.apt:
         name:
@@ -82,3 +86,245 @@
     - name: Verify Docker is reachable
       ansible.builtin.command: docker info
       changed_when: false
+
+    # === Section 2: Generate NestJS service source ===
+    - name: Create NestJS source directories
+      ansible.builtin.file:
+        path: /app/service/src
+        state: directory
+        mode: "0755"
+
+    - name: Write /app/service/package.json
+      ansible.builtin.copy:
+        dest: /app/service/package.json
+        mode: "0644"
+        content: |
+          {
+            "name": "checkdb-service",
+            "version": "1.0.0",
+            "private": true,
+            "scripts": {
+              "build": "tsc -p tsconfig.json",
+              "start": "node dist/main.js"
+            },
+            "dependencies": {
+              "@nestjs/common": "10.4.4",
+              "@nestjs/core": "10.4.4",
+              "@nestjs/platform-express": "10.4.4",
+              "@nestjs/typeorm": "10.0.2",
+              "pg": "8.13.0",
+              "reflect-metadata": "0.2.2",
+              "rxjs": "7.8.1",
+              "typeorm": "0.3.20"
+            },
+            "devDependencies": {
+              "@types/node": "20.16.5",
+              "typescript": "5.6.2"
+            }
+          }
+
+    - name: Write /app/service/tsconfig.json
+      ansible.builtin.copy:
+        dest: /app/service/tsconfig.json
+        mode: "0644"
+        content: |
+          {
+            "compilerOptions": {
+              "module": "commonjs",
+              "target": "ES2022",
+              "moduleResolution": "node",
+              "experimentalDecorators": true,
+              "emitDecoratorMetadata": true,
+              "outDir": "./dist",
+              "rootDir": "./src",
+              "strict": true,
+              "esModuleInterop": true,
+              "skipLibCheck": true,
+              "forceConsistentCasingInFileNames": true,
+              "resolveJsonModule": true,
+              "declaration": false,
+              "sourceMap": false,
+              "types": ["node"]
+            },
+            "include": ["src/**/*.ts"]
+          }
+
+    - name: "Write /app/service/.dockerignore"
+      ansible.builtin.copy:
+        dest: /app/service/.dockerignore
+        mode: "0644"
+        content: |
+          node_modules
+          dist
+          *.log
+          .env
+          .git
+
+    - name: "Write /app/service/Dockerfile"
+      ansible.builtin.copy:
+        dest: /app/service/Dockerfile
+        mode: "0644"
+        content: |
+          # NestJS probe-API image used by the agent's docker-compose stack.
+          # Multi-stage to keep the runtime layer small.
+
+          # --- Builder stage ----------------------------------------------------------
+          FROM node:20.18.0-alpine AS builder
+          WORKDIR /usr/src/app
+
+          # Install all deps (including dev) for the TypeScript build.
+          COPY package.json ./
+          RUN npm install --no-audit --no-fund
+
+          COPY tsconfig.json ./
+          COPY src ./src
+          RUN npm run build
+
+          # Runtime stage 
+          FROM node:20.18.0-alpine AS runtime
+          ENV NODE_ENV=production
+          WORKDIR /usr/src/app
+
+          # Production deps only.
+          COPY package.json ./
+          RUN npm install --omit=dev --no-audit --no-fund
+
+          # Compiled JavaScript from the builder stage.
+          COPY --from=builder /usr/src/app/dist ./dist
+
+          EXPOSE 8080
+          CMD ["node", "dist/main.js"]
+
+    - name: Write /app/service/src/main.ts
+      ansible.builtin.copy:
+        dest: /app/service/src/main.ts
+        mode: "0644"
+        content: |
+          import 'reflect-metadata';
+          import { NestFactory } from '@nestjs/core';
+          import { AppModule } from './app.module';
+
+          async function bootstrap(): Promise<void> {
+            const app = await NestFactory.create(AppModule, { abortOnError: false });
+            app.enableShutdownHooks();
+            const port = parseInt(process.env.PORT || '8080', 10);
+            await app.listen(port, '0.0.0.0');
+          }
+
+          bootstrap().catch((err: unknown) => {
+            console.error('Bootstrap failed:', err);
+            process.exit(1);
+          });
+
+    - name: Write /app/service/src/app.module.ts
+      ansible.builtin.copy:
+        dest: /app/service/src/app.module.ts
+        mode: "0644"
+        content: |
+          import { Module } from '@nestjs/common';
+          import { TypeOrmModule } from '@nestjs/typeorm';
+          import { AppController } from './app.controller';
+          import { dataSourceOptions } from './data-source';
+
+          @Module({
+            imports: [TypeOrmModule.forRoot(dataSourceOptions)],
+            controllers: [AppController],
+          })
+          export class AppModule {}
+
+    - name: Write /app/service/src/app.controller.ts
+      ansible.builtin.copy:
+        dest: /app/service/src/app.controller.ts
+        mode: "0644"
+        content: |
+          import {
+            Controller,
+            Get,
+            InternalServerErrorException,
+          } from '@nestjs/common';
+          import { InjectDataSource } from '@nestjs/typeorm';
+          import { DataSource } from 'typeorm';
+
+          interface CheckDbResponse {
+            ok: boolean;
+            result: number;
+          }
+
+          @Controller()
+          export class AppController {
+            constructor(
+              @InjectDataSource() private readonly dataSource: DataSource,
+            ) {}
+
+            @Get('checkdb')
+            async checkdb(): Promise<CheckDbResponse> {
+              try {
+                const rows: { result: string | number }[] = await this.dataSource.query(
+                  'SELECT 1 AS result',
+                );
+                const value = Number(rows?.[0]?.result);
+                if (!Number.isFinite(value)) {
+                  throw new InternalServerErrorException('Invalid SELECT 1 result');
+                }
+                return { ok: true, result: value };
+              } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                throw new InternalServerErrorException(`DB query failed: ${message}`);
+              }
+            }
+          }
+
+    - name: Write /app/service/src/data-source.ts
+      ansible.builtin.copy:
+        dest: /app/service/src/data-source.ts
+        mode: "0644"
+        content: |
+          import { TypeOrmModuleOptions } from '@nestjs/typeorm';
+
+          export const dataSourceOptions: TypeOrmModuleOptions = {
+            type: 'postgres',
+            host: process.env.POSTGRES_HOST || 'postgres',
+            port: parseInt(process.env.POSTGRES_PORT || '5432', 10),
+            username: process.env.POSTGRES_USER || 'postgres',
+            password: process.env.POSTGRES_PASSWORD || 'postgres',
+            database: process.env.POSTGRES_DB || 'checkdb',
+            synchronize: false,
+            logging: ['error'],
+          };
+
+    # === Section 3: Generate docker-compose.yml ===
+    - name: Write /app/docker-compose.yml
+      ansible.builtin.copy:
+        dest: /app/docker-compose.yml
+        mode: "0644"
+        content: |
+          services:
+            postgres:
+              image: postgres:16
+              environment:
+                POSTGRES_USER: postgres
+                POSTGRES_PASSWORD: postgres
+                POSTGRES_DB: checkdb
+              ports:
+                - "5432:5432"
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U postgres -d checkdb"]
+                interval: 2s
+                timeout: 3s
+                retries: 15
+                start_period: 5s
+
+            nestjs:
+              build:
+                context: ./service
+                dockerfile: Dockerfile
+              ports:
+                - "8080:8080"
+              environment:
+                POSTGRES_HOST: postgres
+                POSTGRES_PORT: 5432
+                POSTGRES_USER: postgres
+                POSTGRES_PASSWORD: postgres
+                POSTGRES_DB: checkdb
+              depends_on:
+                - postgres

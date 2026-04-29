@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
 #
 # Test entry point invoked by the Harbor verifier.
-#
-# Installs pytest and requests into a dedicated venv (the Main Container's
-# Ubuntu 24.04 base enforces PEP 668, which forbids system-wide pip), runs
-# the test suite, and writes the reward to /logs/verifier/reward.txt.
 
 mkdir -p /logs/verifier
 
+# Ensure python3-venv is available (Main Container ships only curl + ca-certificates)
+apt-get update -qq
+apt-get install -y --no-install-recommends python3-venv
+
 VENV=/opt/test-venv
 
-# Idempotent install: only set up the venv once per container lifetime.
 if [ ! -x "${VENV}/bin/pytest" ]; then
   python3 -m venv "${VENV}"
   "${VENV}/bin/pip" install --quiet --no-cache-dir \

@@ -13,7 +13,7 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
 
-# --- Runtime stage ----------------------------------------------------------
+# Runtime stage 
 FROM node:20.18.0-alpine AS runtime
 ENV NODE_ENV=production
 WORKDIR /usr/src/app

@@ -13,8 +13,12 @@ export class AppController {
 
   /**
    * Probe endpoint. Executes `SELECT 1` against the configured Postgres
-   * connection and returns the result. The integer in `result` comes from
-   * the database, not from the application; if Postgres is reachable but
+   * connection and returns the result.
+   *
+   * The integer in `result` comes from
+   * the database, not from the application;
+   *
+   * if Postgres is reachable but
    * mis-configured, this will surface as a non-1 value.
    */
   @Get("checkdb")

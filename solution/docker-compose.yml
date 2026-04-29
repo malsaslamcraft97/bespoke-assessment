@@ -1,0 +1,47 @@
+# Oracle reference compose file.
+#
+# Two services: a Postgres instance with a real readiness healthcheck, and
+# the brittle NestJS API which only starts once Postgres reports as healthy.
+# The depends_on / service_healthy pairing is what makes this resilient
+# across cold restarts.
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: checkdb
+    ports:
+      - "5432:5432"
+    # pg_isready is the canonical "is Postgres accepting connections" probe.
+    # Without this, depends_on can only wait for the container to *start*,
+    # which is not the same thing as the database being usable.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d checkdb"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 5s
+
+  nestjs:
+    build:
+      context: ./service
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: checkdb
+    # Wait for Postgres to report HEALTHY (per its healthcheck above), not
+    # merely STARTED. Without service_healthy, the NestJS skeleton's eager
+    # bootstrap fails on cold starts because Postgres has not yet finished
+    # initializing.
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # No restart policy on purpose. Adding restart: always would mask the
+    # readiness race rather than fix it; tests are designed to catch that.

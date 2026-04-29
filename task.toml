@@ -1,0 +1,38 @@
+schema_version = "1.1"
+
+[task]
+name = "INCUBYTE/hard-devops-task"
+description = "Provision a Dockerized Postgres + NestJS API stack via Ansible such that an HTTP probe endpoint stays available across repeated cold restarts."
+authors = [
+  { name = "Aslam", email = "aslam@incubyte.co" },
+]
+keywords = [
+  "ansible",
+  "docker",
+  "docker-compose",
+  "postgres",
+  "nestjs",
+  "orchestration",
+  "healthcheck",
+]
+
+[metadata]
+difficulty_explanation = "Requires the agent to author both an Ansible playbook for Docker installation and a docker-compose configuration that orchestrates a Postgres + NestJS stack. The non-obvious step is recognizing that the provided NestJS skeleton fails fast when the database is not yet accepting connections, which makes a naive `depends_on` insufficient and forces the agent to debug startup logs and introduce a proper Postgres healthcheck plus a `service_healthy` condition."
+category = "devops"
+
+[verifier]
+# Ample headroom for: build + 3 down/up cycles in test_resilient_to_restart_cycles.
+timeout_sec = 900.0
+
+[agent]
+# Per-trial wall clock for the agent. terminus-2 + Kimi K2 typically completes in
+# 5-15 min on success; 30 min ceiling avoids premature timeouts on harder paths.
+timeout_sec = 1800.0
+
+[environment]
+build_timeout_sec = 900.0
+os = "linux"
+cpus = 2
+memory_mb = 4096
+storage_mb = 12288
+allow_internet = true

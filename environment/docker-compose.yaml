@@ -1,0 +1,27 @@
+# Harbor uses this compose file to start the Main Container.
+# We need privileged mode so the agent can install and run dockerd inside,
+# which is required to fulfill the "install Docker via Ansible + run docker
+# compose" workflow described in the task instructions.
+
+services:
+  main:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    privileged: true
+    working_dir: /app
+    # Persistent storage for the inner dockerd's image/container layers.
+    # Without a named volume here, overlay2-on-overlay2 frequently fails to
+    # initialize and dockerd refuses to start.
+    volumes:
+      - dind-storage:/var/lib/docker
+    # Tmpfs for the inner dockerd's runtime sockets and pidfiles.
+    tmpfs:
+      - /run
+      - /tmp
+    # Keep the container alive for the agent to work in. Harbor will exec
+    # commands inside it.
+    command: ["sleep", "infinity"]
+
+volumes:
+  dind-storage:

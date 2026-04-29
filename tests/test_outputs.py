@@ -65,6 +65,16 @@ def _wait_for_checkdb(timeout: int) -> requests.Response:
         f"last_status={last_status}, last_error={last_error}"
     )
 
+def _contains_int_one(obj) -> bool:
+    """Recursively check whether the integer 1 appears anywhere in the structure."""
+    if obj == 1 and isinstance(obj, int) and not isinstance(obj, bool):
+        return True
+    if isinstance(obj, dict):
+        return any(_contains_int_one(v) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_contains_int_one(v) for v in obj)
+    return False
+
 
 # ---------------------------------------------------------------------------
 # Test 1 — Compose stack has Postgres and the NestJS app running
@@ -150,7 +160,15 @@ def test_checkdb_actually_queries_db() -> None:
 
     assert isinstance(body, dict), f"Expected a JSON object, got: {body!r}"
     assert "result" in body, f"Response missing `result` field: {body!r}"
-    assert body["result"] == 1, (
-        f"`result` should equal 1 from SELECT 1, got: {body['result']!r}. "
+
+    # The agent might shape `result` as any of:
+    #   1                        (the integer directly)
+    #   {"result": 1}            (an object with named column)
+    #   {"?column?": 1}          (PostgreSQL's default name for unaliased SELECT 1)
+    #   [{"?column?": 1}]        (the raw row array)
+    # All are acceptable — what matters is that the integer 1 appears,
+    # because that proves a real SELECT 1 was executed.
+    assert _contains_int_one(body["result"]), (
+        f"`result` should contain the integer 1 from SELECT 1, got: {body['result']!r}. "
         "A hardcoded 200 without a real DB query will not pass this check."
     )

@@ -38,6 +38,16 @@ docker info > /dev/null
 # /app/service/ (which was playbook generated). 
 # Postgres is pulled from Docker Hub.
 log "Building and starting the docker compose stack"
+
+# Pre-emptive cleanup: remove any leftover containers from previous trial
+# runs. With DooD (host docker socket), containers spawned by past trials
+# persist across Main Container lifecycles and will block port bindings.
+log "Cleaning up any leftover stack from previous trials"
+docker compose -f /app/docker-compose.yml down -v --remove-orphans 2>/dev/null || true
+# Catch anything that escaped the project (different project name, etc.)
+docker ps -aq --filter "publish=5432" 2>/dev/null | xargs -r docker rm -f 2>/dev/null || true
+docker ps -aq --filter "publish=8080" 2>/dev/null | xargs -r docker rm -f 2>/dev/null || true
+
 docker compose up -d --build
 
 # 5. Poll /checkdb until it returns 200 or we hit the deadline. The first

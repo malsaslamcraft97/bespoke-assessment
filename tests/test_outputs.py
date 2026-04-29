@@ -1,5 +1,5 @@
 """
-Functional verifier for INCUBYTE/hard-devops-task.
+Functional test verifiers
 
 3 test categories, each checking observable behavior of the running stack:
   1. The Compose stack has Postgres and the NestJS app running, basically 'docker ps'
@@ -7,10 +7,6 @@ Functional verifier for INCUBYTE/hard-devops-task.
   3. verify /checkdb
     3.1 GET /checkdb returns HTTP 200.
     3.2 The /checkdb response carries the result of a real SELECT 1 from the DB.
-
-Tests are intentionally agnostic about how the agent organized their files,
-container names, or Compose project name. We assert only on what the user
-can observe from the host.
 """
 
 from __future__ import annotations
@@ -24,23 +20,14 @@ from typing import Optional
 import pytest
 import requests
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
-# Try the Main Container's localhost first, then fall back to host.docker.internal.
-# When using DooD (host docker socket mounted), the agent's containers run on the
-# host's daemon, so host.docker.internal is the path to reach them.
 CHECKDB_HOSTS = ["localhost", "host.docker.internal"]
 
 # How long /checkdb may take to come up after `docker compose up -d`.
 CHECKDB_RECOVERY_TIMEOUT_SEC = 35
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
+# Helpers
 def _checkdb_url(host: str) -> str:
     return f"http://{host}:8080/checkdb"
 
@@ -76,9 +63,7 @@ def _contains_int_one(obj) -> bool:
     return False
 
 
-# ---------------------------------------------------------------------------
 # Test 1 — Compose stack has Postgres and the NestJS app running
-# ---------------------------------------------------------------------------
 
 def test_compose_services_running() -> None:
     """`docker ps` must show running Postgres and app containers."""
@@ -104,10 +89,7 @@ def test_compose_services_running() -> None:
     assert has_postgres, f"Postgres container not running. `docker ps`:\n{proc.stdout}"
     assert has_app, f"App container not running. `docker ps`:\n{proc.stdout}"
 
-
-# ---------------------------------------------------------------------------
 # Test 2 — Required ports are listening
-# ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
     "port,label",
@@ -132,10 +114,7 @@ def test_ports_exposed(port: int, label: str) -> None:
         f"last_error={last_error}"
     )
 
-
-# ---------------------------------------------------------------------------
 # Test 3.1 — /checkdb returns 200
-# ---------------------------------------------------------------------------
 
 def test_checkdb_returns_200() -> None:
     """The probe endpoint must respond with HTTP 200 (with a brief warmup window)."""
@@ -144,10 +123,7 @@ def test_checkdb_returns_200() -> None:
         f"Expected 200, got {resp.status_code}. Body: {resp.text[:300]!r}"
     )
 
-
-# ---------------------------------------------------------------------------
 # Test 3.2 — /checkdb actually queries the database
-# ---------------------------------------------------------------------------
 
 def test_checkdb_actually_queries_db() -> None:
     """The response body must contain the integer 1 (from a real SELECT 1)."""
@@ -161,13 +137,6 @@ def test_checkdb_actually_queries_db() -> None:
     assert isinstance(body, dict), f"Expected a JSON object, got: {body!r}"
     assert "result" in body, f"Response missing `result` field: {body!r}"
 
-    # The agent might shape `result` as any of:
-    #   1                        (the integer directly)
-    #   {"result": 1}            (an object with named column)
-    #   {"?column?": 1}          (PostgreSQL's default name for unaliased SELECT 1)
-    #   [{"?column?": 1}]        (the raw row array)
-    # All are acceptable — what matters is that the integer 1 appears,
-    # because that proves a real SELECT 1 was executed.
     assert _contains_int_one(body["result"]), (
         f"`result` should contain the integer 1 from SELECT 1, got: {body['result']!r}. "
         "A hardcoded 200 without a real DB query will not pass this check."

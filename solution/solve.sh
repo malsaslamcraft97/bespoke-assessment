@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 
-# Oracle solution for INCUBYTE/hard-devops-task.
+# Solution for INCUBYTE/hard-devops-task.
 #
-# Runs from /solution at task time. Installs Ansible, then runs the
-# reference playbook which (a) installs Docker Engine + Compose plugin,
+# Runs from /solution at task time. 
+# 1. Installs Ansible, then runs the
+# 2. reference playbook which (a) installs Docker Engine + Compose plugin,
 # (b) generates the NestJS source tree at /app/service/, and (c) writes
-# /app/docker-compose.yml. Finally brings up the stack and waits for
-# /checkdb to respond with HTTP 200.
+# /app/docker-compose.yml. 
+# Finally brings up the stack and waits for /checkdb to respond with HTTP 200.
 #
 # This script must succeed deterministically; the verifier uses its
 # success as the signal that the task is solvable.
@@ -39,11 +40,10 @@ docker info > /dev/null
 # Postgres is pulled from Docker Hub.
 log "Building and starting the docker compose stack"
 
-# Pre-emptive cleanup: remove any leftover containers from previous trial
-# runs. With DooD (host docker socket), containers spawned by past trials
-# persist across Main Container lifecycles and will block port bindings.
+# Pre-emptive cleanup: remove any leftover containers from previous trial runs
 log "Cleaning up any leftover stack from previous trials"
 docker compose -f /app/docker-compose.yml down -v --remove-orphans 2>/dev/null || true
+
 # Catch anything that escaped the project (different project name, etc.)
 docker ps -aq --filter "publish=5432" 2>/dev/null | xargs -r docker rm -f 2>/dev/null || true
 docker ps -aq --filter "publish=8080" 2>/dev/null | xargs -r docker rm -f 2>/dev/null || true

@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
-#
-# Test entry point invoked by the Harbor verifier.
 
 mkdir -p /logs/verifier
 
-# Ensure python3-venv is available (Main Container ships only curl + ca-certificates)
 apt-get update -qq
 apt-get install -y --no-install-recommends python3-venv
 

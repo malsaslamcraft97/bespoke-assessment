@@ -1,14 +1,4 @@
 ---
-# Oracle Ansible playbook.
-#
-# 3 responsibilities:
-# 1. Install Docker engine + Compose plugin and start the daemon
-# 2. Generate the NestJS service source tree at app/service
-# 3. Write /app/docker-compose.yml so that stack could be brought up
-#
-# Designed to be able to run inside a privileged container with no init system.
-# dockerd is launched directly via nohup rather than service/systemctl.
-
 - name: Provision Docker, NestJS service, and compose stack
   hosts: localhost
   connection: local

@@ -59,33 +59,24 @@
     - name: Install Docker Engine and Compose plugin
       ansible.builtin.apt:
         name:
-          - docker-ce
           - docker-ce-cli
-          - containerd.io
           - docker-buildx-plugin
           - docker-compose-plugin
         state: present
         update_cache: true
 
-    - name: Check whether dockerd is already running
-      ansible.builtin.shell: pgrep -x dockerd || true
-      register: dockerd_pid
-      changed_when: false
-
-    - name: Start dockerd in the background
-      ansible.builtin.shell: |
-        nohup dockerd > /var/log/dockerd.log 2>&1 &
-      when: dockerd_pid.stdout == ""
-      changed_when: true
-
-    - name: Wait for the Docker socket to be ready
-      ansible.builtin.wait_for:
-        path: /var/run/docker.sock
-        timeout: 60
-
     - name: Verify Docker is reachable
       ansible.builtin.command: docker info
       changed_when: false
+
+    - name: DEBUG — confirm host socket is mounted (Main Container should appear)
+      ansible.builtin.command: docker ps --format "{{ '{{' }}.Names{{ '}}' }}\t{{ '{{' }}.Image{{ '}}' }}"
+      changed_when: false
+      register: dps
+
+    - name: DEBUG — print docker ps output
+      ansible.builtin.debug:
+        msg: "{{ dps.stdout_lines }}"
 
     # === Section 2: Generate NestJS service source ===
     - name: Create NestJS source directories

@@ -15,9 +15,9 @@ can observe from the host.
 
 from __future__ import annotations
 
-import subprocess
 import re
 import socket
+import subprocess
 import time
 from typing import Optional
 
@@ -28,38 +28,46 @@ import requests
 # Configuration
 # ---------------------------------------------------------------------------
 
-CHECKDB_URL = "http://localhost:8080/checkdb"
+# Try the Main Container's localhost first, then fall back to host.docker.internal.
+# When using DooD (host docker socket mounted), the agent's containers run on the
+# host's daemon, so host.docker.internal is the path to reach them.
+CHECKDB_HOSTS = ["localhost", "host.docker.internal"]
 
 # How long /checkdb may take to come up after `docker compose up -d`.
-# Tight enough to discriminate between a properly orchestrated stack
-# (typically <20s) and one that race-loops on startup (often 30-60s+).
 CHECKDB_RECOVERY_TIMEOUT_SEC = 35
 
 
-# --- Helpers ---
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _checkdb_url(host: str) -> str:
+    return f"http://{host}:8080/checkdb"
+
 
 def _wait_for_checkdb(timeout: int) -> requests.Response:
-    """Poll /checkdb until 200 or timeout. Returns the successful response."""
+    """Poll /checkdb on each candidate host until 200 or timeout."""
     deadline = time.time() + timeout
     last_status: Optional[int] = None
     last_error: Optional[str] = None
     while time.time() < deadline:
-        try:
-            resp = requests.get(CHECKDB_URL, timeout=3)
-            last_status = resp.status_code
-            if resp.status_code == 200:
-                return resp
-        except requests.RequestException as exc:
-            last_error = repr(exc)
+        for host in CHECKDB_HOSTS:
+            try:
+                resp = requests.get(_checkdb_url(host), timeout=3)
+                last_status = resp.status_code
+                if resp.status_code == 200:
+                    return resp
+            except requests.RequestException as exc:
+                last_error = f"{host}: {exc!r}"
         time.sleep(1)
     pytest.fail(
-        f"/checkdb did not return 200 within {timeout}s. "
+        f"/checkdb did not return 200 within {timeout}s on any of {CHECKDB_HOSTS}. "
         f"last_status={last_status}, last_error={last_error}"
     )
 
 
 # ---------------------------------------------------------------------------
-# Test 1 — Compose stack has Postgres and the NestJS app running - Docker PS
+# Test 1 — Compose stack has Postgres and the NestJS app running
 # ---------------------------------------------------------------------------
 
 def test_compose_services_running() -> None:
@@ -88,7 +96,7 @@ def test_compose_services_running() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 2 — Assert host ports
+# Test 2 — Required ports are listening
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
@@ -99,13 +107,20 @@ def test_compose_services_running() -> None:
     ],
 )
 def test_ports_exposed(port: int, label: str) -> None:
-    """Both required ports must be reachable on localhost."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(3)
+    """Required ports must be reachable on at least one of the candidate hosts."""
+    last_error = None
+    for host in CHECKDB_HOSTS:
         try:
-            sock.connect(("127.0.0.1", port))
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(3)
+                sock.connect((host, port))
+            return  # connected successfully — test passes
         except (ConnectionRefusedError, OSError, socket.timeout) as exc:
-            pytest.fail(f"{label} port {port} not listening: {exc!r}")
+            last_error = f"{host}: {exc!r}"
+    pytest.fail(
+        f"{label} port {port} not listening on any of {CHECKDB_HOSTS}. "
+        f"last_error={last_error}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -139,5 +154,3 @@ def test_checkdb_actually_queries_db() -> None:
         f"`result` should equal 1 from SELECT 1, got: {body['result']!r}. "
         "A hardcoded 200 without a real DB query will not pass this check."
     )
-
-

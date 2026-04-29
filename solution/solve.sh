@@ -1,17 +1,5 @@
 #!/usr/bin/env bash
 
-# Solution for INCUBYTE/hard-devops-task.
-#
-# Runs from /solution at task time. 
-# 1. Installs Ansible, then runs the
-# 2. reference playbook which (a) installs Docker Engine + Compose plugin,
-# (b) generates the NestJS source tree at /app/service/, and (c) writes
-# /app/docker-compose.yml. 
-# Finally brings up the stack and waits for /checkdb to respond with HTTP 200.
-#
-# This script must succeed deterministically; the verifier uses its
-# success as the signal that the task is solvable.
-
 set -euo pipefail
 
 log() { echo "[oracle $(date -u +%H:%M:%S)] $*"; }

@@ -1,59 +1,16 @@
-"""
-Functional test verifiers
-
-3 test categories, each checking observable behavior of the running stack:
-  1. The Compose stack has Postgres and the NestJS app running, basically 'docker ps'
-  2. Both required ports (5432, 8080) are listening.
-  3. verify /checkdb
-    3.1 GET /checkdb returns HTTP 200.
-    3.2 The /checkdb response carries the result of a real SELECT 1 from the DB.
-"""
-
 from __future__ import annotations
 
-import re
-import socket
 import subprocess
-import time
-from typing import Optional
-
-import pytest
 import requests
 
-CHECKDB_HOSTS = ["localhost", "host.docker.internal"]
-
-# How long /checkdb may take to come up after `docker compose up -d`.
-CHECKDB_RECOVERY_TIMEOUT_SEC = 35
+CHECKDB_HOST = "host.docker.internal"
 
 
+def _checkdb_url() -> str:
+    return f"http://{CHECKDB_HOST}:8080/checkdb"
 
-# Helpers
-def _checkdb_url(host: str) -> str:
-    return f"http://{host}:8080/checkdb"
-
-
-def _wait_for_checkdb(timeout: int) -> requests.Response:
-    """Poll /checkdb on each candidate host until 200 or timeout."""
-    deadline = time.time() + timeout
-    last_status: Optional[int] = None
-    last_error: Optional[str] = None
-    while time.time() < deadline:
-        for host in CHECKDB_HOSTS:
-            try:
-                resp = requests.get(_checkdb_url(host), timeout=3)
-                last_status = resp.status_code
-                if resp.status_code == 200:
-                    return resp
-            except requests.RequestException as exc:
-                last_error = f"{host}: {exc!r}"
-        time.sleep(1)
-    pytest.fail(
-        f"/checkdb did not return 200 within {timeout}s on any of {CHECKDB_HOSTS}. "
-        f"last_status={last_status}, last_error={last_error}"
-    )
 
 def _contains_int_one(obj) -> bool:
-    """Recursively check whether the integer 1 appears anywhere in the structure."""
     if obj == 1 and isinstance(obj, int) and not isinstance(obj, bool):
         return True
     if isinstance(obj, dict):
@@ -63,81 +20,57 @@ def _contains_int_one(obj) -> bool:
     return False
 
 
-# Test 1 — Compose stack has Postgres and the NestJS app running
-
 def test_compose_services_running() -> None:
-    """`docker ps` must show running Postgres and app containers."""
+    """Both required containers are running and publishing their ports."""
+    # Postgres on 5432
     proc = subprocess.run(
-        ["docker", "ps", "--format", "{{.Names}}\t{{.Status}}"],
+        ["docker", "ps", "--filter", "publish=5432", "--format", "{{.Names}}"],
         capture_output=True,
         text=True,
-        timeout=30,
     )
-    assert proc.returncode == 0, f"`docker ps` failed: stderr={proc.stderr}"
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip(), f"No container publishing port 5432:\n{proc.stdout}"
 
-    lines = proc.stdout.lower().splitlines()
-    has_postgres = any(
-        "postgres" in line and ("running" in line or "up" in line)
-        for line in lines
+    # App on 8080
+    proc = subprocess.run(
+        ["docker", "ps", "--filter", "publish=8080", "--format", "{{.Names}}"],
+        capture_output=True,
+        text=True,
     )
-    has_app = any(
-        re.search(r"(nestjs|nest|node|app|service|api|checkdb)", line)
-        and ("running" in line or "up" in line)
-        for line in lines
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip(), f"No container publishing port 8080:\n{proc.stdout}"
+
+
+def test_exposed_ports():
+    result = subprocess.run(
+        ["docker", "ps", "--format", "{{.Names}} {{.Ports}}"],
+        capture_output=True,
+        text=True,
     )
+    lines = result.stdout.strip().splitlines()
+    port_map = {}
+    for line in lines:
+        parts = line.split(" ", 1)
+        if len(parts) == 2:
+            port_map[parts[0]] = parts[1]
 
-    assert has_postgres, f"Postgres container not running. `docker ps`:\n{proc.stdout}"
-    assert has_app, f"App container not running. `docker ps`:\n{proc.stdout}"
+    ports_output = result.stdout.strip()
+    assert "app-postgres" in ports_output
+    assert "5432" in ports_output
+    assert "app-nestjs" in ports_output
+    assert "8080" in ports_output
 
-# Test 2 — Required ports are listening
-
-@pytest.mark.parametrize(
-    "port,label",
-    [
-        (5432, "Postgres"),
-        (8080, "NestJS"),
-    ],
-)
-def test_ports_exposed(port: int, label: str) -> None:
-    """Required ports must be reachable on at least one of the candidate hosts."""
-    last_error = None
-    for host in CHECKDB_HOSTS:
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.settimeout(3)
-                sock.connect((host, port))
-            return  # connected successfully — test passes
-        except (ConnectionRefusedError, OSError, socket.timeout) as exc:
-            last_error = f"{host}: {exc!r}"
-    pytest.fail(
-        f"{label} port {port} not listening on any of {CHECKDB_HOSTS}. "
-        f"last_error={last_error}"
-    )
-
-# Test 3.1 — /checkdb returns 200
 
 def test_checkdb_returns_200() -> None:
-    """The probe endpoint must respond with HTTP 200 (with a brief warmup window)."""
-    resp = _wait_for_checkdb(timeout=CHECKDB_RECOVERY_TIMEOUT_SEC)
-    assert resp.status_code == 200, (
-        f"Expected 200, got {resp.status_code}. Body: {resp.text[:300]!r}"
-    )
+    """GET /checkdb returns HTTP 200."""
+    resp = requests.get(_checkdb_url())
+    assert resp.status_code == 200
 
-# Test 3.2 — /checkdb actually queries the database
 
 def test_checkdb_actually_queries_db() -> None:
-    """The response body must contain the integer 1 (from a real SELECT 1)."""
-    resp = _wait_for_checkdb(timeout=CHECKDB_RECOVERY_TIMEOUT_SEC)
-
-    try:
-        body = resp.json()
-    except ValueError as exc:
-        pytest.fail(f"/checkdb response was not JSON: {exc!r} body={resp.text[:300]!r}")
-
-    assert isinstance(body, dict), f"Expected a JSON object, got: {body!r}"
-    assert "result" in body, f"Response missing `result` field: {body!r}"
-
-    assert _contains_int_one(body["result"]), (
-        f"`result` should contain the integer 1 from SELECT 1, got: {body['result']!r}. "
-        "A hardcoded 200 without a real DB query will not pass this check."
-    )
+    """Response contains the result of a real SELECT 1 query."""
+    resp = requests.get(_checkdb_url())
+    body = resp.json()
+    assert isinstance(body, dict)
+    assert "result" in body
+    assert _contains_int_one(body["result"])
